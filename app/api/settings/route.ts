@@ -1,21 +1,20 @@
 import { NextResponse } from "next/server";
 import { getGoal, isDbConfigured, setGoal } from "@/lib/db";
+import { ownerFromRequest } from "@/lib/userauth";
 import { friendlyMessage, logStructured, newRequestId } from "@/lib/errors";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-function cleanOwner(v: unknown): string {
-  return String(v ?? "").trim().slice(0, 60);
+function unauthorized() {
+  return NextResponse.json({ ok: false, code: "auth", message: "다시 로그인해주세요." }, { status: 401 });
 }
 
-// GET ?owner=NAME → { goal, dbConfigured }
+// GET → { goal, dbConfigured } (owner=토큰에서)
 export async function GET(req: Request) {
   const requestId = newRequestId();
-  const owner = cleanOwner(new URL(req.url).searchParams.get("owner"));
-  if (!owner) {
-    return NextResponse.json({ ok: false, message: "owner 필요" }, { status: 400 });
-  }
+  const owner = ownerFromRequest(req);
+  if (!owner) return unauthorized();
   try {
     const goal = await getGoal(owner);
     return NextResponse.json({ ok: true, dbConfigured: isDbConfigured(), goal });
@@ -25,20 +24,18 @@ export async function GET(req: Request) {
   }
 }
 
-// PUT { owner, daily_goal_g }
+// PUT { daily_goal_g }
 export async function PUT(req: Request) {
   const requestId = newRequestId();
+  const owner = ownerFromRequest(req);
+  if (!owner) return unauthorized();
   let body: Record<string, unknown>;
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ ok: false, message: "잘못된 요청" }, { status: 400 });
   }
-  const owner = cleanOwner(body.owner);
   const goal = Number(body.daily_goal_g);
-  if (!owner) {
-    return NextResponse.json({ ok: false, message: "owner 필요" }, { status: 400 });
-  }
   if (!Number.isFinite(goal) || goal <= 0 || goal > 1000) {
     return NextResponse.json({ ok: false, message: "daily_goal_g 확인(1~1000)" }, { status: 400 });
   }

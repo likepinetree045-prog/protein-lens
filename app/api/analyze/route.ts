@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { analyzeImage } from "@/lib/gemini";
+import { ownerFromRequest } from "@/lib/userauth";
 import {
   AppError,
   friendlyMessage,
@@ -15,6 +16,13 @@ export const maxDuration = 60; // Gemini 비전 호출 여유
 // POST { imageBase64, mimeType } → 분석 결과 JSON (저장은 하지 않음)
 export async function POST(req: Request) {
   const requestId = newRequestId();
+  // 로그인한 사용자만 분석 가능(Gemini 무료 한도 오남용 방지).
+  if (!ownerFromRequest(req)) {
+    return NextResponse.json(
+      { ok: false, code: "auth", message: "다시 로그인해주세요." },
+      { status: 401 },
+    );
+  }
   let body: { imageBase64?: string; mimeType?: string };
   try {
     body = await req.json();

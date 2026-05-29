@@ -55,6 +55,15 @@ export async function ensureSchema(): Promise<void> {
       daily_goal_g  numeric NOT NULL DEFAULT 140
     )
   `;
+  // 이름별 비밀번호(PIN). pin_hash 는 salt + scrypt 해시(평문 저장 안 함).
+  await sql`
+    CREATE TABLE IF NOT EXISTS users (
+      owner       text PRIMARY KEY,
+      pin_hash    text NOT NULL,
+      pin_salt    text NOT NULL,
+      created_at  timestamptz NOT NULL DEFAULT now()
+    )
+  `;
   _schemaReady = true;
 }
 
