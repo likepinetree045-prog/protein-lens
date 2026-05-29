@@ -32,7 +32,7 @@ export default function NameGate({ initial = "", onSubmit, onCancel }: Props) {
       <input
         value={name}
         onChange={(e) => setName(e.target.value)}
-        placeholder="예: 민수"
+        placeholder="예: 대인"
         autoFocus
         onKeyDown={(e) => {
           if (e.key === "Enter" && valid) onSubmit(name.trim());
