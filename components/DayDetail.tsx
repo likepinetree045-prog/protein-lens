@@ -9,6 +9,7 @@ import ResultCard from "./ResultCard";
 import ErrorRetry from "./ErrorRetry";
 
 interface Props {
+  owner: string;
   date: string;
   dateLabel: string;
   entries: Entry[];
@@ -24,6 +25,7 @@ type Flow =
   | { step: "error"; message: string };
 
 export default function DayDetail({
+  owner,
   date,
   dateLabel,
   entries,
@@ -66,6 +68,7 @@ export default function DayDetail({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          owner,
           date,
           name: edited.name,
           protein_g: edited.protein_g,
@@ -87,7 +90,10 @@ export default function DayDetail({
   }
 
   async function remove(id: string) {
-    const res = await fetch(`/api/entries?id=${id}`, { method: "DELETE" });
+    const res = await fetch(
+      `/api/entries?id=${id}&owner=${encodeURIComponent(owner)}`,
+      { method: "DELETE" },
+    );
     const data = await res.json().catch(() => ({ ok: false }));
     if (data.ok) onChanged();
   }
@@ -97,7 +103,9 @@ export default function DayDetail({
     if (input == null) return;
     const g = Number(input);
     if (!Number.isFinite(g) || g < 0) return;
-    const res = await fetch(`/api/entries?id=${entry.id}`, {
+    const res = await fetch(
+      `/api/entries?id=${entry.id}&owner=${encodeURIComponent(owner)}`,
+      {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ protein_g: g }),
