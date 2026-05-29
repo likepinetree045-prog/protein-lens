@@ -27,7 +27,8 @@ export async function ensureSchema(): Promise<void> {
   const sql = db();
   if (!sql) throw new Error("DB not configured (DATABASE_URL missing)");
 
-  await sql`CREATE EXTENSION IF NOT EXISTS pgcrypto`;
+  // gen_random_uuid() 는 PostgreSQL 13+ 코어 함수(Neon은 PG15+)라 별도 확장 불필요.
+  // CREATE EXTENSION 은 role 권한에 따라 실패할 수 있어 의도적으로 쓰지 않는다.
   await sql`
     CREATE TABLE IF NOT EXISTS entries (
       id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -55,7 +55,7 @@ async function probeDb(): Promise<ProbeResult> {
     await ensureSchema();
     const rows = (await sql`
       SELECT count(*)::int AS n FROM information_schema.tables
-      WHERE table_name IN ('entries', 'settings')
+      WHERE table_schema = 'public' AND table_name IN ('entries', 'settings')
     `) as { n: number }[];
     return {
       label: "db",
