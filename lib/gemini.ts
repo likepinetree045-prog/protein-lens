@@ -74,11 +74,19 @@ export async function analyzeImage(input: {
         responseMimeType: "application/json",
         responseSchema,
         temperature: 0.2,
-        maxOutputTokens: 400,
+        maxOutputTokens: 1024,
+        // gemini-2.5-flash 는 기본 thinking 이 켜져 있어 출력 토큰을 사고에 소진,
+        // JSON 본문이 비어 파싱 실패가 잦다. 구조화 추출이라 thinking 은 불필요 → 끔.
+        thinkingConfig: { thinkingBudget: 0 },
       },
     });
     raw = (res.text ?? "").trim();
+    if (!raw) {
+      const reason = res.candidates?.[0]?.finishReason ?? "unknown";
+      throw new AppError("parse", "parse", `빈 응답 (finishReason=${reason})`);
+    }
   } catch (e) {
+    if (e instanceof AppError) throw e;
     throw new AppError("vision_call", "vision_call", e);
   }
 

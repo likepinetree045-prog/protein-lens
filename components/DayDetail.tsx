@@ -22,7 +22,18 @@ type Flow =
   | { step: "idle" }
   | { step: "analyzing" }
   | { step: "result"; result: AnalysisResult; saving: boolean }
+  | { step: "manual"; saving: boolean }
   | { step: "error"; message: string };
+
+// 직접 입력 시 ResultCard 에 넣을 빈 시드.
+const MANUAL_SEED: AnalysisResult = {
+  name: "",
+  servingDesc: "",
+  proteinGrams: 0,
+  kind: "food",
+  confidence: "estimate",
+  basis: "직접 입력",
+};
 
 export default function DayDetail({
   owner,
@@ -62,7 +73,12 @@ export default function DayDetail({
     base: AnalysisResult,
     edited: { name: string; protein_g: number },
   ) {
-    setFlow({ step: "result", result: base, saving: true });
+    const isManual = base === MANUAL_SEED;
+    setFlow(
+      isManual
+        ? { step: "manual", saving: true }
+        : { step: "result", result: base, saving: true },
+    );
     try {
       const res = await fetch("/api/entries", {
         method: "POST",
@@ -194,14 +210,22 @@ export default function DayDetail({
         </div>
       )}
 
-      {/* 사진 추가 플로우 */}
+      {/* 추가 플로우 */}
       {flow.step === "idle" && (
-        <CameraButton
-          onCapture={analyze}
-          onError={() =>
-            setFlow({ step: "error", message: "사진을 읽지 못했어요. 다시 찍어볼까요?" })
-          }
-        />
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <CameraButton
+            onCapture={analyze}
+            onError={() =>
+              setFlow({ step: "error", message: "사진을 읽지 못했어요. 다시 찍어볼까요?" })
+            }
+          />
+          <button
+            className="btn btn-secondary"
+            onClick={() => setFlow({ step: "manual", saving: false })}
+          >
+            ✏️ 직접 입력
+          </button>
+        </div>
       )}
       {flow.step === "analyzing" && (
         <button className="btn" disabled>
@@ -216,10 +240,20 @@ export default function DayDetail({
           onCancel={() => setFlow({ step: "idle" })}
         />
       )}
+      {flow.step === "manual" && (
+        <ResultCard
+          result={MANUAL_SEED}
+          saving={flow.saving}
+          manual
+          onSave={(edited) => save(MANUAL_SEED, edited)}
+          onCancel={() => setFlow({ step: "idle" })}
+        />
+      )}
       {flow.step === "error" && (
         <ErrorRetry
           message={flow.message}
           onRetry={() => setFlow({ step: "idle" })}
+          onManual={() => setFlow({ step: "manual", saving: false })}
           onDismiss={() => setFlow({ step: "idle" })}
         />
       )}
