@@ -35,7 +35,6 @@ export default function CameraButton({
         ref={inputRef}
         type="file"
         accept="image/*"
-        capture="environment"
         style={{ display: "none" }}
         onChange={(e) => {
           const f = e.target.files?.[0];
