@@ -6,12 +6,19 @@ import type { AnalysisResult } from "@/lib/gemini";
 interface Props {
   result: AnalysisResult;
   saving: boolean;
+  manual?: boolean; // 직접 입력 모드: 뱃지·근거 숨김
   onSave: (edited: { name: string; protein_g: number }) => void;
   onCancel: () => void;
 }
 
-// 분석 결과: 단백질 숫자가 히어로. 이름/그램은 저장 전 수정 가능.
-export default function ResultCard({ result, saving, onSave, onCancel }: Props) {
+// 분석 결과(또는 직접 입력): 단백질 숫자가 히어로. 이름/그램은 저장 전 수정 가능.
+export default function ResultCard({
+  result,
+  saving,
+  manual = false,
+  onSave,
+  onCancel,
+}: Props) {
   const [name, setName] = useState(result.name);
   const [grams, setGrams] = useState(String(result.proteinGrams));
 
@@ -27,26 +34,30 @@ export default function ResultCard({ result, saving, onSave, onCancel }: Props) 
         </div>
       </div>
 
-      <div style={{ display: "flex", justifyContent: "center", gap: 8 }}>
-        <span
-          className={`badge ${result.confidence === "exact" ? "badge-exact" : "badge-estimate"}`}
-        >
-          {result.confidence === "exact" ? "정확" : "추정"}
-        </span>
-        <span className="badge badge-estimate">
-          {result.kind === "label"
-            ? "영양성분표"
-            : result.kind === "product"
-              ? "포장제품"
-              : "음식"}
-        </span>
-      </div>
+      {!manual && (
+        <div style={{ display: "flex", justifyContent: "center", gap: 8 }}>
+          <span
+            className={`badge ${result.confidence === "exact" ? "badge-exact" : "badge-estimate"}`}
+          >
+            {result.confidence === "exact" ? "정확" : "추정"}
+          </span>
+          <span className="badge badge-estimate">
+            {result.kind === "label"
+              ? "영양성분표"
+              : result.kind === "product"
+                ? "포장제품"
+                : "음식"}
+          </span>
+        </div>
+      )}
 
       <label style={lbl}>
         이름
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
+          autoFocus={manual}
+          placeholder={manual ? "예: 닭가슴살" : undefined}
           style={input}
         />
       </label>
@@ -61,7 +72,7 @@ export default function ResultCard({ result, saving, onSave, onCancel }: Props) 
         />
       </label>
 
-      {result.basis && (
+      {!manual && result.basis && (
         <p style={{ color: "var(--muted)", fontSize: 12, margin: 0 }}>
           근거: {result.basis}
         </p>
