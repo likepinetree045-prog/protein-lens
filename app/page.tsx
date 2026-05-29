@@ -5,6 +5,7 @@ import type { Entry } from "@/lib/db";
 import { monthLabel, monthStr, todayStr } from "@/lib/dates";
 import Calendar from "@/components/Calendar";
 import DayDetail from "@/components/DayDetail";
+import NameGate from "@/components/NameGate";
 
 interface MonthData {
   entries: Entry[];
@@ -13,11 +14,31 @@ interface MonthData {
   dbConfigured: boolean;
 }
 
-const GOAL_CACHE_KEY = "protein-lens:goal";
+const OWNER_KEY = "protein-lens:owner";
+const goalCacheKey = (owner: string) => `protein-lens:goal:${owner}`;
 
 export default function HomePage() {
   const now = new Date();
   const today = todayStr();
+
+  // ── 사용자 이름(소유자) ──────────────────────────────────────
+  const [owner, setOwner] = useState<string | null>(null);
+  const [ownerLoaded, setOwnerLoaded] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem(OWNER_KEY);
+    if (saved) setOwner(saved);
+    setOwnerLoaded(true);
+  }, []);
+
+  function saveOwner(name: string) {
+    window.localStorage.setItem(OWNER_KEY, name);
+    setOwner(name);
+    setEditingName(false);
+  }
+
+  // ── 달력 상태 ────────────────────────────────────────────────
   const [year, setYear] = useState(now.getFullYear());
   const [month1, setMonth1] = useState(now.getMonth() + 1);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -25,19 +46,17 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
+    if (!owner) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/entries?month=${monthStr(year, month1)}`);
+      const res = await fetch(
+        `/api/entries?month=${monthStr(year, month1)}&owner=${encodeURIComponent(owner)}`,
+      );
       const json = await res.json();
       if (json.ok) {
-        // 목표가 DB에 없으면 localStorage 폴백
-        const cached = Number(
-          typeof window !== "undefined"
-            ? window.localStorage.getItem(GOAL_CACHE_KEY)
-            : null,
-        );
+        const cached = Number(window.localStorage.getItem(goalCacheKey(owner)));
         const goal = json.goal ?? (Number.isFinite(cached) && cached > 0 ? cached : null);
-        if (json.goal) window.localStorage.setItem(GOAL_CACHE_KEY, String(json.goal));
+        if (json.goal) window.localStorage.setItem(goalCacheKey(owner), String(json.goal));
         setData({
           entries: json.entries,
           dailySums: json.dailySums,
@@ -52,7 +71,7 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
-  }, [year, month1]);
+  }, [owner, year, month1]);
 
   useEffect(() => {
     void load();
@@ -72,18 +91,32 @@ export default function HomePage() {
   }
 
   async function changeGoal() {
+    if (!owner) return;
     const cur = data?.goal ?? 140;
     const input = window.prompt("일일 목표 단백질 (g)", String(cur));
     if (input == null) return;
     const g = Number(input);
     if (!Number.isFinite(g) || g <= 0) return;
-    window.localStorage.setItem(GOAL_CACHE_KEY, String(g));
+    window.localStorage.setItem(goalCacheKey(owner), String(g));
     setData((d) => (d ? { ...d, goal: g } : d));
     await fetch("/api/settings", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ daily_goal_g: g }),
+      body: JSON.stringify({ owner, daily_goal_g: g }),
     }).catch(() => {});
+  }
+
+  // ── 렌더 ─────────────────────────────────────────────────────
+  if (!ownerLoaded) return <main className="app-shell" />;
+
+  if (!owner || editingName) {
+    return (
+      <NameGate
+        initial={owner ?? ""}
+        onSubmit={saveOwner}
+        onCancel={editingName && owner ? () => setEditingName(false) : undefined}
+      />
+    );
   }
 
   const selectedEntries =
@@ -103,14 +136,17 @@ export default function HomePage() {
               marginBottom: 20,
             }}
           >
-            <div>
+            <button
+              onClick={() => setEditingName(true)}
+              style={{ background: "none", border: "none", padding: 0, textAlign: "left" }}
+            >
               <div style={{ fontSize: 13, color: "var(--accent)", fontWeight: 700, letterSpacing: "0.08em" }}>
-                PROTEIN LENS
+                {owner}님의 기록
               </div>
               <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                사진으로 단백질 기록
+                이름 탭 → 바꾸기
               </div>
-            </div>
+            </button>
             <button
               onClick={changeGoal}
               className="btn btn-secondary"
@@ -149,6 +185,7 @@ export default function HomePage() {
         </>
       ) : (
         <DayDetail
+          owner={owner}
           date={selectedDate}
           dateLabel={`${year}년 ${monthLabel(month1)} ${Number(selectedDate.slice(8, 10))}일`}
           entries={selectedEntries}

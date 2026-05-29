@@ -22,22 +22,33 @@ export const runtime = "nodejs";
 const MONTH_RE = /^\d{4}-\d{2}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-// GET ?month=YYYY-MM → { entries, dailySums, goal, dbConfigured }
+function cleanOwner(v: unknown): string {
+  return String(v ?? "").trim().slice(0, 60);
+}
+
+// GET ?month=YYYY-MM&owner=NAME → { entries, dailySums, goal, dbConfigured }
 export async function GET(req: Request) {
   const requestId = newRequestId();
   const url = new URL(req.url);
   const month = url.searchParams.get("month") ?? "";
+  const owner = cleanOwner(url.searchParams.get("owner"));
   if (!MONTH_RE.test(month)) {
     return NextResponse.json(
       { ok: false, code: "unknown", message: "month=YYYY-MM 필요" },
       { status: 400 },
     );
   }
+  if (!owner) {
+    return NextResponse.json(
+      { ok: false, code: "unknown", message: "owner 필요" },
+      { status: 400 },
+    );
+  }
   try {
     const [entries, dailySums, goal] = await Promise.all([
-      listEntriesByMonth(month),
-      getDailySums(month),
-      getGoal(),
+      listEntriesByMonth(owner, month),
+      getDailySums(owner, month),
+      getGoal(owner),
     ]);
     return NextResponse.json({
       ok: true,
@@ -55,7 +66,7 @@ export async function GET(req: Request) {
   }
 }
 
-// POST { date, name, protein_g, kind, confidence, basis }
+// POST { owner, date, name, protein_g, kind, confidence, basis }
 export async function POST(req: Request) {
   const requestId = newRequestId();
   let body: Record<string, unknown>;
@@ -65,6 +76,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, message: "잘못된 요청" }, { status: 400 });
   }
 
+  const owner = cleanOwner(body.owner);
   const date = String(body.date ?? "");
   const name = String(body.name ?? "").trim();
   const protein_g = Number(body.protein_g);
@@ -72,6 +84,9 @@ export async function POST(req: Request) {
   const confidence = String(body.confidence ?? "estimate") as Confidence;
   const basis = String(body.basis ?? "");
 
+  if (!owner) {
+    return NextResponse.json({ ok: false, message: "owner 필요" }, { status: 400 });
+  }
   if (!DATE_RE.test(date)) {
     return NextResponse.json({ ok: false, message: "date=YYYY-MM-DD 필요" }, { status: 400 });
   }
@@ -80,7 +95,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const entry = await addEntry({ date, name, protein_g, kind, confidence, basis });
+    const entry = await addEntry({ owner, date, name, protein_g, kind, confidence, basis });
     return NextResponse.json({ ok: true, entry });
   } catch (e) {
     logStructured({ requestId, kind: "entries:post", stage: "db", code: "db", rawError: e });
@@ -91,13 +106,14 @@ export async function POST(req: Request) {
   }
 }
 
-// PATCH ?id= { name?, protein_g?, date? }
+// PATCH ?id=&owner= { name?, protein_g?, date? }
 export async function PATCH(req: Request) {
   const requestId = newRequestId();
   const url = new URL(req.url);
   const id = url.searchParams.get("id") ?? "";
-  if (!id) {
-    return NextResponse.json({ ok: false, message: "id 필요" }, { status: 400 });
+  const owner = cleanOwner(url.searchParams.get("owner"));
+  if (!id || !owner) {
+    return NextResponse.json({ ok: false, message: "id/owner 필요" }, { status: 400 });
   }
   let body: Record<string, unknown>;
   try {
@@ -117,7 +133,7 @@ export async function PATCH(req: Request) {
   if (typeof body.date === "string" && DATE_RE.test(body.date)) patch.date = body.date;
 
   try {
-    const entry = await updateEntry(id, patch);
+    const entry = await updateEntry(owner, id, patch);
     if (!entry) return NextResponse.json({ ok: false, message: "없는 기록" }, { status: 404 });
     return NextResponse.json({ ok: true, entry });
   } catch (e) {
@@ -129,16 +145,17 @@ export async function PATCH(req: Request) {
   }
 }
 
-// DELETE ?id=
+// DELETE ?id=&owner=
 export async function DELETE(req: Request) {
   const requestId = newRequestId();
   const url = new URL(req.url);
   const id = url.searchParams.get("id") ?? "";
-  if (!id) {
-    return NextResponse.json({ ok: false, message: "id 필요" }, { status: 400 });
+  const owner = cleanOwner(url.searchParams.get("owner"));
+  if (!id || !owner) {
+    return NextResponse.json({ ok: false, message: "id/owner 필요" }, { status: 400 });
   }
   try {
-    const removed = await deleteEntry(id);
+    const removed = await deleteEntry(owner, id);
     return NextResponse.json({ ok: removed });
   } catch (e) {
     logStructured({ requestId, kind: "entries:delete", stage: "db", code: "db", rawError: e });

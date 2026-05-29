@@ -5,6 +5,9 @@ import { env } from "./env";
 // Neon(Postgres) 클라이언트. DATABASE_URL 미설정 시 null 을 반환해
 // 호출부가 "DB 미연결" 상태를 친절히 다룰 수 있게 한다.
 // 스키마는 사용자가 SQL 에디터를 만지지 않도록 코드(ensureSchema)로 생성한다.
+//
+// 데이터는 owner(사용자 이름)로 분리한다 — 로그인은 없지만 이름별로
+// 본인 기록만 보고/쓰게 한다. (비밀번호 없음: 같은 이름이면 같은 데이터)
 // ─────────────────────────────────────────────────────────────
 
 let _sql: NeonQueryFunction<false, false> | null = null;
@@ -21,17 +24,17 @@ export function isDbConfigured(): boolean {
 
 let _schemaReady = false;
 
-// CREATE TABLE IF NOT EXISTS — 멱등. 최초 DB 접근 시 1회만 실행되도록 가드.
+// CREATE TABLE IF NOT EXISTS + 멱등 ALTER. 최초 DB 접근 시 1회만 실행.
 export async function ensureSchema(): Promise<void> {
   if (_schemaReady) return;
   const sql = db();
   if (!sql) throw new Error("DB not configured (DATABASE_URL missing)");
 
   // gen_random_uuid() 는 PostgreSQL 13+ 코어 함수(Neon은 PG15+)라 별도 확장 불필요.
-  // CREATE EXTENSION 은 role 권한에 따라 실패할 수 있어 의도적으로 쓰지 않는다.
   await sql`
     CREATE TABLE IF NOT EXISTS entries (
       id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      owner       text NOT NULL DEFAULT '',
       date        date NOT NULL,
       name        text NOT NULL,
       protein_g   numeric NOT NULL,
@@ -41,15 +44,17 @@ export async function ensureSchema(): Promise<void> {
       created_at  timestamptz NOT NULL DEFAULT now()
     )
   `;
-  await sql`CREATE INDEX IF NOT EXISTS entries_date_idx ON entries (date)`;
+  // 이미 존재하는 DB(owner 없던 버전)를 위한 멱등 마이그레이션.
+  await sql`ALTER TABLE entries ADD COLUMN IF NOT EXISTS owner text NOT NULL DEFAULT ''`;
+  await sql`CREATE INDEX IF NOT EXISTS entries_owner_date_idx ON entries (owner, date)`;
+
+  // 목표도 사용자별. (구버전 singleton settings 테이블은 그대로 두고 더는 쓰지 않음.)
   await sql`
-    CREATE TABLE IF NOT EXISTS settings (
-      id            int PRIMARY KEY DEFAULT 1,
-      daily_goal_g  numeric NOT NULL DEFAULT 140,
-      CONSTRAINT settings_singleton CHECK (id = 1)
+    CREATE TABLE IF NOT EXISTS user_settings (
+      owner         text PRIMARY KEY,
+      daily_goal_g  numeric NOT NULL DEFAULT 140
     )
   `;
-  await sql`INSERT INTO settings (id, daily_goal_g) VALUES (1, 140) ON CONFLICT (id) DO NOTHING`;
   _schemaReady = true;
 }
 
@@ -59,6 +64,7 @@ export type Confidence = "exact" | "estimate";
 
 export interface Entry {
   id: string;
+  owner: string;
   date: string; // YYYY-MM-DD
   name: string;
   protein_g: number;
@@ -69,6 +75,7 @@ export interface Entry {
 }
 
 export interface NewEntry {
+  owner: string;
   date: string;
   name: string;
   protein_g: number;
@@ -80,6 +87,7 @@ export interface NewEntry {
 function toEntry(row: Record<string, unknown>): Entry {
   return {
     id: String(row.id),
+    owner: String(row.owner ?? ""),
     date:
       row.date instanceof Date
         ? row.date.toISOString().slice(0, 10)
@@ -106,15 +114,18 @@ function monthRange(month: string): { start: string; end: string } {
   return { start, end };
 }
 
-// ── CRUD ──────────────────────────────────────────────────────
-export async function listEntriesByMonth(month: string): Promise<Entry[]> {
+// ── CRUD (모두 owner 로 범위 한정) ─────────────────────────────
+export async function listEntriesByMonth(
+  owner: string,
+  month: string,
+): Promise<Entry[]> {
   const sql = db();
   if (!sql) return [];
   await ensureSchema();
   const { start, end } = monthRange(month);
   const rows = (await sql`
     SELECT * FROM entries
-    WHERE date >= ${start} AND date < ${end}
+    WHERE owner = ${owner} AND date >= ${start} AND date < ${end}
     ORDER BY date ASC, created_at ASC
   `) as Record<string, unknown>[];
   return rows.map(toEntry);
@@ -122,6 +133,7 @@ export async function listEntriesByMonth(month: string): Promise<Entry[]> {
 
 // 날짜별 단백질 합계 { "YYYY-MM-DD": grams }
 export async function getDailySums(
+  owner: string,
   month: string,
 ): Promise<Record<string, number>> {
   const sql = db();
@@ -130,7 +142,7 @@ export async function getDailySums(
   const { start, end } = monthRange(month);
   const rows = (await sql`
     SELECT date, SUM(protein_g) AS total FROM entries
-    WHERE date >= ${start} AND date < ${end}
+    WHERE owner = ${owner} AND date >= ${start} AND date < ${end}
     GROUP BY date
   `) as Record<string, unknown>[];
   const out: Record<string, number> = {};
@@ -149,14 +161,15 @@ export async function addEntry(e: NewEntry): Promise<Entry> {
   if (!sql) throw new Error("DB not configured");
   await ensureSchema();
   const rows = (await sql`
-    INSERT INTO entries (date, name, protein_g, kind, confidence, basis)
-    VALUES (${e.date}, ${e.name}, ${e.protein_g}, ${e.kind}, ${e.confidence}, ${e.basis})
+    INSERT INTO entries (owner, date, name, protein_g, kind, confidence, basis)
+    VALUES (${e.owner}, ${e.date}, ${e.name}, ${e.protein_g}, ${e.kind}, ${e.confidence}, ${e.basis})
     RETURNING *
   `) as Record<string, unknown>[];
   return toEntry(rows[0]);
 }
 
 export async function updateEntry(
+  owner: string,
   id: string,
   patch: Partial<Pick<NewEntry, "name" | "protein_g" | "date">>,
 ): Promise<Entry | null> {
@@ -168,37 +181,38 @@ export async function updateEntry(
       name      = COALESCE(${patch.name ?? null}, name),
       protein_g = COALESCE(${patch.protein_g ?? null}, protein_g),
       date      = COALESCE(${patch.date ?? null}, date)
-    WHERE id = ${id}
+    WHERE id = ${id} AND owner = ${owner}
     RETURNING *
   `) as Record<string, unknown>[];
   return rows[0] ? toEntry(rows[0]) : null;
 }
 
-export async function deleteEntry(id: string): Promise<boolean> {
+export async function deleteEntry(owner: string, id: string): Promise<boolean> {
   const sql = db();
   if (!sql) throw new Error("DB not configured");
   await ensureSchema();
-  const rows = (await sql`DELETE FROM entries WHERE id = ${id} RETURNING id`) as unknown[];
+  const rows = (await sql`
+    DELETE FROM entries WHERE id = ${id} AND owner = ${owner} RETURNING id
+  `) as unknown[];
   return rows.length > 0;
 }
 
-export async function getGoal(): Promise<number | null> {
+export async function getGoal(owner: string): Promise<number | null> {
   const sql = db();
   if (!sql) return null;
   await ensureSchema();
-  const rows = (await sql`SELECT daily_goal_g FROM settings WHERE id = 1`) as Record<
-    string,
-    unknown
-  >[];
+  const rows = (await sql`
+    SELECT daily_goal_g FROM user_settings WHERE owner = ${owner}
+  `) as Record<string, unknown>[];
   return rows[0] ? Number(rows[0].daily_goal_g) : null;
 }
 
-export async function setGoal(grams: number): Promise<void> {
+export async function setGoal(owner: string, grams: number): Promise<void> {
   const sql = db();
   if (!sql) throw new Error("DB not configured");
   await ensureSchema();
   await sql`
-    INSERT INTO settings (id, daily_goal_g) VALUES (1, ${grams})
-    ON CONFLICT (id) DO UPDATE SET daily_goal_g = ${grams}
+    INSERT INTO user_settings (owner, daily_goal_g) VALUES (${owner}, ${grams})
+    ON CONFLICT (owner) DO UPDATE SET daily_goal_g = ${grams}
   `;
 }
