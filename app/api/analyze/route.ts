@@ -10,6 +10,7 @@ import {
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const maxDuration = 60; // Gemini 비전 호출 여유
 
 // POST { imageBase64, mimeType } → 분석 결과 JSON (저장은 하지 않음)
 export async function POST(req: Request) {

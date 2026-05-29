@@ -6,6 +6,7 @@ import { db, ensureSchema, isDbConfigured } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const maxDuration = 60; // Gemini/DB 스모크 여유
 
 interface ProbeResult {
   label: string;
