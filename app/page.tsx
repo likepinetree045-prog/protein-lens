@@ -15,28 +15,47 @@ interface MonthData {
 }
 
 const OWNER_KEY = "protein-lens:owner";
+const TOKEN_KEY = "protein-lens:token";
 const goalCacheKey = (owner: string) => `protein-lens:goal:${owner}`;
 
 export default function HomePage() {
   const now = new Date();
   const today = todayStr();
 
-  // ── 사용자 이름(소유자) ──────────────────────────────────────
+  // ── 인증(이름 + 토큰) ────────────────────────────────────────
   const [owner, setOwner] = useState<string | null>(null);
-  const [ownerLoaded, setOwnerLoaded] = useState(false);
-  const [editingName, setEditingName] = useState(false);
+  const [token, setToken] = useState<string | null>(null);
+  const [authLoaded, setAuthLoaded] = useState(false);
+  const [relogin, setRelogin] = useState(false);
 
   useEffect(() => {
-    const saved = window.localStorage.getItem(OWNER_KEY);
-    if (saved) setOwner(saved);
-    setOwnerLoaded(true);
+    const o = window.localStorage.getItem(OWNER_KEY);
+    const t = window.localStorage.getItem(TOKEN_KEY);
+    if (o && t) {
+      setOwner(o);
+      setToken(t);
+    }
+    setAuthLoaded(true);
   }, []);
 
-  function saveOwner(name: string) {
+  function onAuthed(name: string, tok: string) {
     window.localStorage.setItem(OWNER_KEY, name);
+    window.localStorage.setItem(TOKEN_KEY, tok);
     setOwner(name);
-    setEditingName(false);
+    setToken(tok);
+    setRelogin(false);
+    setSelectedDate(null);
+    setData(null);
   }
+
+  const logout = useCallback(() => {
+    window.localStorage.removeItem(OWNER_KEY);
+    window.localStorage.removeItem(TOKEN_KEY);
+    setOwner(null);
+    setToken(null);
+    setSelectedDate(null);
+    setData(null);
+  }, []);
 
   // ── 달력 상태 ────────────────────────────────────────────────
   const [year, setYear] = useState(now.getFullYear());
@@ -46,12 +65,16 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
-    if (!owner) return;
+    if (!owner || !token) return;
     setLoading(true);
     try {
-      const res = await fetch(
-        `/api/entries?month=${monthStr(year, month1)}&owner=${encodeURIComponent(owner)}`,
-      );
+      const res = await fetch(`/api/entries?month=${monthStr(year, month1)}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (res.status === 401) {
+        logout();
+        return;
+      }
       const json = await res.json();
       if (json.ok) {
         const cached = Number(window.localStorage.getItem(goalCacheKey(owner)));
@@ -71,7 +94,7 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
-  }, [owner, year, month1]);
+  }, [owner, token, year, month1, logout]);
 
   useEffect(() => {
     void load();
@@ -91,7 +114,7 @@ export default function HomePage() {
   }
 
   async function changeGoal() {
-    if (!owner) return;
+    if (!owner || !token) return;
     const cur = data?.goal ?? 140;
     const input = window.prompt("일일 목표 단백질 (g)", String(cur));
     if (input == null) return;
@@ -101,28 +124,25 @@ export default function HomePage() {
     setData((d) => (d ? { ...d, goal: g } : d));
     await fetch("/api/settings", {
       method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ owner, daily_goal_g: g }),
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ daily_goal_g: g }),
     }).catch(() => {});
   }
 
   // ── 렌더 ─────────────────────────────────────────────────────
-  if (!ownerLoaded) return <main className="app-shell" />;
+  if (!authLoaded) return <main className="app-shell" />;
 
-  if (!owner || editingName) {
+  if (!owner || !token || relogin) {
     return (
       <NameGate
-        initial={owner ?? ""}
-        onSubmit={saveOwner}
-        onCancel={editingName && owner ? () => setEditingName(false) : undefined}
+        onAuthed={onAuthed}
+        onCancel={owner && token && relogin ? () => setRelogin(false) : undefined}
       />
     );
   }
 
   const selectedEntries =
-    selectedDate && data
-      ? data.entries.filter((e) => e.date === selectedDate)
-      : [];
+    selectedDate && data ? data.entries.filter((e) => e.date === selectedDate) : [];
 
   return (
     <main className="app-shell">
@@ -137,15 +157,13 @@ export default function HomePage() {
             }}
           >
             <button
-              onClick={() => setEditingName(true)}
+              onClick={() => setRelogin(true)}
               style={{ background: "none", border: "none", padding: 0, textAlign: "left" }}
             >
               <div style={{ fontSize: 13, color: "var(--accent)", fontWeight: 700, letterSpacing: "0.08em" }}>
                 {owner}님의 기록
               </div>
-              <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                이름 탭 → 바꾸기
-              </div>
+              <div style={{ fontSize: 12, color: "var(--muted)" }}>이름 탭 → 바꾸기/로그아웃</div>
             </button>
             <button
               onClick={changeGoal}
@@ -157,10 +175,7 @@ export default function HomePage() {
           </header>
 
           {data && !data.dbConfigured && (
-            <div
-              className="card"
-              style={{ marginBottom: 16, borderColor: "var(--danger)", fontSize: 13 }}
-            >
+            <div className="card" style={{ marginBottom: 16, borderColor: "var(--danger)", fontSize: 13 }}>
               DB가 아직 연결되지 않았어요. 기록이 저장되지 않습니다. (주인용: SETUP.md 참고)
             </div>
           )}
@@ -185,12 +200,13 @@ export default function HomePage() {
         </>
       ) : (
         <DayDetail
-          owner={owner}
+          token={token}
           date={selectedDate}
           dateLabel={`${year}년 ${monthLabel(month1)} ${Number(selectedDate.slice(8, 10))}일`}
           entries={selectedEntries}
           goal={data?.goal ?? null}
           onChanged={load}
+          onAuthExpired={logout}
           onClose={() => setSelectedDate(null)}
         />
       )}

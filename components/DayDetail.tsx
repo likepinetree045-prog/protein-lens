@@ -9,12 +9,13 @@ import ResultCard from "./ResultCard";
 import ErrorRetry from "./ErrorRetry";
 
 interface Props {
-  owner: string;
+  token: string;
   date: string;
   dateLabel: string;
   entries: Entry[];
   goal: number | null;
   onChanged: () => void; // 월 데이터 재조회
+  onAuthExpired: () => void; // 401 → 로그아웃
   onClose: () => void;
 }
 
@@ -36,15 +37,21 @@ const MANUAL_SEED: AnalysisResult = {
 };
 
 export default function DayDetail({
-  owner,
+  token,
   date,
   dateLabel,
   entries,
   goal,
   onChanged,
+  onAuthExpired,
   onClose,
 }: Props) {
   const [flow, setFlow] = useState<Flow>({ step: "idle" });
+
+  const authHeaders = {
+    "content-type": "application/json",
+    authorization: `Bearer ${token}`,
+  };
 
   const total = entries.reduce((s, e) => s + e.protein_g, 0);
   const ratio = goal && goal > 0 ? Math.min(total / goal, 1) : 0;
@@ -55,9 +62,10 @@ export default function DayDetail({
     try {
       const res = await fetch("/api/analyze", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: authHeaders,
         body: JSON.stringify({ imageBase64, mimeType }),
       });
+      if (res.status === 401) return onAuthExpired();
       const data = await res.json();
       if (data.ok) {
         setFlow({ step: "result", result: data.result, saving: false });
@@ -82,9 +90,8 @@ export default function DayDetail({
     try {
       const res = await fetch("/api/entries", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: authHeaders,
         body: JSON.stringify({
-          owner,
           date,
           name: edited.name,
           protein_g: edited.protein_g,
@@ -93,6 +100,7 @@ export default function DayDetail({
           basis: base.basis,
         }),
       });
+      if (res.status === 401) return onAuthExpired();
       const data = await res.json();
       if (data.ok) {
         setFlow({ step: "idle" });
@@ -106,10 +114,11 @@ export default function DayDetail({
   }
 
   async function remove(id: string) {
-    const res = await fetch(
-      `/api/entries?id=${id}&owner=${encodeURIComponent(owner)}`,
-      { method: "DELETE" },
-    );
+    const res = await fetch(`/api/entries?id=${id}`, {
+      method: "DELETE",
+      headers: authHeaders,
+    });
+    if (res.status === 401) return onAuthExpired();
     const data = await res.json().catch(() => ({ ok: false }));
     if (data.ok) onChanged();
   }
@@ -119,13 +128,12 @@ export default function DayDetail({
     if (input == null) return;
     const g = Number(input);
     if (!Number.isFinite(g) || g < 0) return;
-    const res = await fetch(
-      `/api/entries?id=${entry.id}&owner=${encodeURIComponent(owner)}`,
-      {
+    const res = await fetch(`/api/entries?id=${entry.id}`, {
       method: "PATCH",
-      headers: { "content-type": "application/json" },
+      headers: authHeaders,
       body: JSON.stringify({ protein_g: g }),
     });
+    if (res.status === 401) return onAuthExpired();
     const data = await res.json().catch(() => ({ ok: false }));
     if (data.ok) onChanged();
   }
